@@ -1,0 +1,9 @@
+[commit]
+    gpgsign = true
+[push]
+    followTags = true
+[core]
+    protectHFS = true
+    protectNTFS = true
+[branch "main"]
+    mergeoptions = --no-ff
