@@ -1,0 +1,18 @@
+{
+    "code_keywords": {
+        "actions": [
+            "code", "create", "edit", "delete", "modify",
+            "show", "display", "implement", "fix", "test",
+            "import", "define", "update"
+        ],
+        "programming_terms": [
+            "function", "class", "method", "variable",
+            "bug", "error", "exception", "debug",
+            "compile", "runtime", "syntax"
+        ],
+        "file_extensions": [
+            ".py", ".js", ".java", ".cpp", ".ts",
+            ".html", ".css", ".json", ".yaml", ".xml"
+        ]
+    }
+}
