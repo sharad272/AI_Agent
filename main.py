@@ -64,13 +64,20 @@ class FileChangeHandler(FileSystemEventHandler):
         logger.info(f"Updated context with {len(file_contents)} files")
 
 def main():
-    # Initialize components with correct path handling
-    logger.info("Initializing with Ollama Deepseek model...")
-    # Use the current working directory instead of script directory
-    current_dir = os.getcwd()
-    logger.info(f"Using base directory: {current_dir}")
+    print("="*50)
+    print("DEBUG: Starting main function")
+    print("DEBUG: Current working directory:", os.getcwd())
+    print("="*50)
     
-    file_reader = FileReader(current_dir)
+    # Initialize components with tracking-folder path
+    logger.info("Initializing with Ollama Deepseek model...")
+    # Use the tracking-folder directory
+    tracking_dir = os.path.join(os.getcwd(), "tracking-folder")
+    print("DEBUG: Tracking directory path:", tracking_dir)
+    print("DEBUG: Tracking directory exists:", os.path.exists(tracking_dir))
+    print("="*50)
+    
+    file_reader = FileReader(tracking_dir)
     query_service = QueryService()
 
     # Initial context loading
@@ -78,9 +85,9 @@ def main():
     event_handler = FileChangeHandler(file_reader, query_service)
     event_handler.update_context()
 
-    # Set up file monitoring
+    # Set up file monitoring for tracking-folder
     observer = Observer()
-    observer.schedule(event_handler, path=file_reader.base_dir, recursive=True)
+    observer.schedule(event_handler, path=tracking_dir, recursive=True)
     observer.start()
 
     try:
@@ -109,4 +116,5 @@ def main():
     observer.join()
 
 if __name__ == "__main__":
+    print("Hello World!")
     main()
