@@ -1,102 +1,107 @@
 # AI Code Assistant
 
-An intelligent code assistant powered by Ollama and FAISS vector database that helps with code-related queries and file operations.
+An intelligent code assistant powered by Ollama and FAISS vector database that provides code understanding, querying, and analysis capabilities.
 
 ## Features
 
-- Real-time file monitoring and context updating
-- Code-aware query processing using vector similarity search
-- File operations (create, edit, show, delete)
-- Intelligent context management
-- Integration with Ollama's Deepseek model
+- **Vector Similarity Search**: Uses FAISS for efficient code context search
+- **File Management**: Reads and processes multiple file types (.py, .js, .ts, .java, .cpp, .json, .md, .txt)
+- **Real-time Monitoring**: Watches for file changes and updates context automatically
+- **Intelligent Response**: Uses Ollama's Deepseek model for code understanding
+- **Error Handling**: Robust error handling across file operations and model interactions
 
 ## Prerequisites
 
 - Python 3.8+
-- Ollama installed and running locally
-- FAISS vector database
+- Ollama with deepseek-r1:1.5b model
 - Required Python packages (see requirements.txt)
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone [repository-url]
-cd AI_Agent
-```
-
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-3. Ensure Ollama is installed and running with the Deepseek model:
-```bash
-ollama pull deepseek-r1:1.5b
-```
 
 ## Project Structure
 
 ```
 AI_Agent/
-├── main.py              # Main application entry point
 ├── models/
-│   └── ollama_handler.py    # Ollama model integration
-├── services/
-│   └── query_service.py     # Query processing service
+│   └── ollama_handler.py    # Manages Ollama model interactions
+├── utils/
+│   └── file_reader.py       # Handles file operations and monitoring
 ├── vectordb/
-│   └── faiss_db.py         # FAISS vector database management
-└── requirements.txt     # Project dependencies
+│   └── faiss_db.py         # FAISS vector database implementation
+├── main.py                  # Application entry point
+└── requirements.txt         # Project dependencies
+```
+
+## Installation
+
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+2. Install Ollama and pull the model:
+```bash
+ollama pull deepseek-r1:1.5b
 ```
 
 ## Usage
 
-1. Start the application:
+Run the application:
 ```bash
 python main.py
 ```
 
-2. Enter your questions or commands when prompted. Examples:
-   - "Show me the content of faiss_db.py"
-   - "Fix the code in query_service.py"
-   - "What does the OllamaHandler class do?"
+### Query Examples
 
-3. Type 'quit' to exit the application.
+1. Code Explanation:
+```
+Enter your question: Explain how the FAISS indexing works in this project
+```
 
-## Features in Detail
+2. Error Fixing:
+```
+Enter your question: Fix the error in file_reader.py
+```
 
-### Code-Related Queries
-- The system automatically detects if a query is code-related
-- Utilizes FAISS for semantic search of relevant code context
-- Provides file-specific responses with relevant code snippets
+3. Code Understanding:
+```
+Enter your question: How does the file monitoring system work?
+```
 
-### File Operations
-- Show file content
-- Fix code issues
-- Create new files
-- Edit existing files
-- Delete files
+## Key Components
 
-### Context Management
-- Real-time file monitoring
-- Automatic context updates on file changes
-- Efficient vector similarity search
+### FAISSManager (faiss_db.py)
+- Manages document embeddings
+- Performs similarity search
+- Handles index creation and updates
 
-## Configuration
+### FileReader (file_reader.py)
+- Manages file operations
+- Handles file type validation
+- Maintains file content cache
 
-The system uses default configurations for:
-- Ollama model: deepseek-r1:1.5b
-- FAISS vector dimension: 384
-- File monitoring: recursive directory watching
+### OllamaHandler (ollama_handler.py)
+- Interfaces with Ollama model
+- Processes different query types
+- Handles response formatting
+
+### Main Application (main.py)
+- Implements file change monitoring
+- Manages user interactions
+- Coordinates system components
+
+## Error Handling
+
+The system includes comprehensive error handling for:
+- File operations
+- Model interactions
+- Vector database operations
+- Context updates
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+2. Create a feature branch
+3. Submit a pull request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License
