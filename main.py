@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import time
 import os
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,11 +15,48 @@ class FileChangeHandler(FileSystemEventHandler):
     def __init__(self, file_reader, query_service):
         self.file_reader = file_reader
         self.query_service = query_service
+        self.last_update = 0
+        self.update_cooldown = 2.0
+        self.pending_changes: Set[str] = set()
+        self.base_dir = Path(query_service.base_dir)  # Add base_dir as Path
+
+    def _schedule_update(self):
+        """Schedule context update with debouncing"""
+        current_time = time.time()
+        if current_time - self.last_update >= self.update_cooldown and self.pending_changes:
+            self._do_update()
+            self.last_update = current_time
+
+    def _do_update(self):
+        """Process pending file changes"""
+        try:
+            # Only update changed files
+            file_contents = {}
+            for filepath in self.pending_changes:
+                with open(os.path.join(self.base_dir, filepath), 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    file_contents[filepath] = content
+            
+            if file_contents:
+                self.query_service.update_context(file_contents)
+                logger.info(f"Updated context with {len(file_contents)} changed files")
+            
+            self.pending_changes.clear()
+
+        except Exception as e:
+            logger.error(f"Error updating files: {e}")
 
     def on_modified(self, event):
-        if not event.is_directory and self.file_reader.is_supported_file(event.src_path):
-            logger.info(f"File changed: {event.src_path}")
-            self.update_context()
+        """Handle file modification events with proper path handling"""
+        try:
+            if not event.is_directory:
+                file_path = Path(event.src_path)
+                if self.file_reader.is_supported_file(str(file_path)):
+                    rel_path = str(file_path.relative_to(self.base_dir))
+                    self.pending_changes.add(rel_path)
+                    self._schedule_update()
+        except Exception as e:
+            logger.error(f"Error in file change handler: {e}")
 
     def update_context(self):
         file_contents = self.file_reader.read_all_files()

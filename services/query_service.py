@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional, Set
 from models.ollama_handler import OllamaHandler
 from vectordb.faiss_db import FAISSManager
+from utils.file_reader import FileReader
 import logging
 import os
 import json
@@ -11,15 +13,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class QueryResponse:
     answer: str
-    relevant_files: list
-    context: str
-    is_code_related: bool  # New field to track if query is code-related
+    is_code_related: bool
+    relevant_files: List[str]
+    context: str = ""  # Make this optional with default empty string
 
 class QueryService:
     def __init__(self):
         self.ollama = OllamaHandler()
-        self.faiss_manager = FAISSManager()
         self.base_dir = os.path.normpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.file_reader = FileReader(self.base_dir)  # Initialize FileReader first
+        self.faiss_manager = self.file_reader.vector_store  # Use the same vector store instance
         self.context = {}  # Initialize context dictionary
         self.code_keywords = self._load_keywords()
         self.code_actions = {
@@ -53,9 +56,12 @@ class QueryService:
         logger.info(f"Added {len(new_keywords)} new keywords")
 
     def update_context(self, file_contents: dict):
-        """Update the context with new file contents"""
+        """Update context and vector store"""
         self.context = file_contents
-        logger.info(f"Updated context with {len(file_contents)} files")
+        # Ensure vector store is updated
+        for filepath, content in file_contents.items():
+            self.faiss_manager.add_file(filepath, content)
+        logger.info(f"Updated context and vector store with {len(file_contents)} files")
 
     def is_code_related_query(self, query: str) -> bool:
         """Determine if the query is related to code or files"""
@@ -132,112 +138,88 @@ class QueryService:
         except Exception as e:
             return f"Error fixing file: {str(e)}"
 
+    def is_contextual_query(self, query: str) -> bool:
+        """Determine if query needs code context"""
+        # Check length and code keywords
+        if len(query.split()) <= 3:  # Short queries
+            non_contextual = {
+                'hi', 'hello', 'hey', 
+                'how are you', 
+                'what is your name',
+                'who are you',
+                'help',
+                'thanks',
+                'thank you'
+            }
+            return not any(q in query.lower() for q in non_contextual)
+        return True
+
     def process_query(self, query: str) -> QueryResponse:
-        """Process a query using vector similarity search and LLM"""
+        """Process query and return suggestions without file modifications"""
         try:
-            logger.info(f"Processing query: {query}")
+            # Special handling for non-contextual queries
+            if not self.is_contextual_query(query):
+                response = self.ollama.get_response(query, "")
+                return QueryResponse(
+                    answer=response,
+                    is_code_related=False,
+                    relevant_files=[],
+                    context=""
+                )
+
+            # For code-related queries
+            vector_results = self.faiss_manager.search(query, k=5)
+            context = self._build_vector_context(vector_results)
             
-            # Check for file operations first
-            file_path = self._get_file_path_from_query(query)
-            if file_path:
-                for action, handler in self.code_actions.items():
-                    if action in query.lower():
-                        answer = handler(file_path)
-                        return QueryResponse(
-                            answer=answer,
-                            context="",
-                            relevant_files=[file_path],
-                            is_code_related=True
-                        )
-
-            is_code_related = self.is_code_related_query(query)
-            context_str = ""
-            relevant_files = []
-
-            # Only perform vector search for code-related queries
-            if is_code_related:
-                # First, try to find relevant documents using FAISS
-                relevant_docs, scores = self.faiss_manager.search(query, k=3)
-                
-                # Prepare context from both FAISS results and current context
-                faiss_context = []
-                if relevant_docs:
-                    faiss_context = [f"File: {path}\n{content}" for path, content in relevant_docs]
-                    # Set initial relevant files from FAISS results
-                    relevant_files = [path for path, _ in relevant_docs]
-                
-                # Add any additional current context
-                current_context = [f"File: {path}\n{content}" 
-                                for path, content in self.context.items()
-                                if path not in [doc[0] for doc in relevant_docs]]
-                
-                # Combine contexts, prioritizing FAISS results
-                context_str = "\n\n".join(faiss_context + current_context[:2])
-
-            # Get response from Ollama
-            answer = self.ollama.get_response(query, context_str if is_code_related else "")
+            if "fix" in query.lower() or "error" in query.lower():
+                context = self._enhance_context_with_contents(vector_results)
             
-            # Update relevant files based on the answer if needed
-            if is_code_related:
-                # Add any additional files mentioned in the answer
-                relevant_files.extend([
-                    path for path in self.context.keys() 
-                    if path.lower() in answer.lower() and path not in relevant_files
-                ])
+            response = self.ollama.get_response(query, context)
             
-            # Handle file operations if needed
-            if any(keyword in query.lower() for keyword in ['create file', 'new file', 'edit file', 'delete file']):
-                answer = self._handle_file_operations(query, answer)
-
             return QueryResponse(
-                answer=answer,
-                context=context_str,
-                relevant_files=relevant_files,
-                is_code_related=is_code_related
+                answer=response,
+                is_code_related=True,
+                relevant_files=[f for f, _ in vector_results],
+                context=context
             )
-            
+
         except Exception as e:
-            logger.error(f"Error processing query: {str(e)}")
+            logger.error(f"Query error: {e}")
             return QueryResponse(
                 answer=f"Error: {str(e)}",
-                context="Error occurred",
+                is_code_related=False,
                 relevant_files=[],
-                is_code_related=False
+                context=""
             )
 
-    def _handle_file_operations(self, query: str, llm_response: str) -> str:
-        """Handle file creation, modification, and deletion based on LLM response"""
+    def _build_vector_context(self, vector_results: List[Tuple[str, float]]) -> str:
+        """Build context with vector similarity information"""
+        if not vector_results:
+            return ""
+        
+        context_parts = ["=== Relevant Files (by similarity) ==="]
+        for filepath, score in vector_results:
+            context_parts.append(f"- {filepath} (similarity: {score:.3f})")
+        return "\n".join(context_parts)
+
+    def _enhance_context_with_contents(self, vector_results: List[Tuple[str, float]]) -> str:
+        """Add file contents to vector context"""
+        context_parts = [self._build_vector_context(vector_results)]
+        
+        for filepath, score in vector_results[:3]:  # Limit to top 3 most relevant files
+            content = self.context.get(filepath)
+            if content:
+                context_parts.append(f"\n=== File: {filepath} ===\n```python\n{content}\n```")
+        
+        return "\n\n".join(context_parts)
+
+    def _get_relevant_files(self, query: str) -> List[str]:
+        """Get relevant files using vector similarity"""
         try:
-            if 'CREATE_FILE:' in llm_response:
-                lines = llm_response.split('\n')
-                for i, line in enumerate(lines):
-                    if line.startswith('CREATE_FILE:'):
-                        filepath = os.path.join(self.base_dir, line.split(':', 1)[1].strip())
-                        content = '\n'.join(lines[i+1:])
-                        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                        with open(filepath, 'w') as f:
-                            f.write(content)
-                        return f"Created file: {filepath}"
-
-            elif 'EDIT_FILE:' in llm_response:
-                lines = llm_response.split('\n')
-                for i, line in enumerate(lines):
-                    if line.startswith('EDIT_FILE:'):
-                        filepath = os.path.join(self.base_dir, line.split(':', 1)[1].strip())
-                        content = '\n'.join(lines[i+1:])
-                        with open(filepath, 'w') as f:
-                            f.write(content)
-                        return f"Modified file: {filepath}"
-
-            elif 'DELETE_FILE:' in llm_response:
-                filepath = os.path.join(self.base_dir, llm_response.split(':', 1)[1].strip())
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-                    return f"Deleted file: {filepath}"
-                return f"File not found: {filepath}"
-
-            return llm_response
-
+            similar_files = self.faiss_manager.search(query, k=5)
+            if not similar_files:  # Handle empty results
+                return []
+            return [filepath for filepath, _ in similar_files]
         except Exception as e:
-            logger.error(f"Error in file operation: {str(e)}")
-            return f"Error performing file operation: {str(e)}"
+            logger.error(f"Error getting relevant files: {e}")
+            return []
