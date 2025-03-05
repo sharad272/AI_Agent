@@ -20,9 +20,30 @@ class QueryService:
             'help': 'I can help you with code analysis and questions.'
         }
         self._code_keywords = {'code', 'file', 'function', 'class', 'explain'}
+        self._file_related_keywords = {
+            'file', 'code', 'function', 'class', 
+            'tracking', 'folder', 'directory',
+            'explain', 'show', 'find', 'search',
+            'meaning', 'context', 'inside'
+        }
+
+    def _is_file_related_query(self, query: str) -> bool:
+        """Check if query is related to files in tracking directory"""
+        query_lower = query.lower()
+        
+        # Check for file-related keywords
+        if any(kw in query_lower for kw in self._file_related_keywords):
+            return True
+            
+        # Check if query contains any tracked file names
+        tracked_files = os.listdir(self.tracking_dir)
+        if any(file.lower() in query_lower for file in tracked_files):
+            return True
+            
+        return False
 
     def process_query(self, query: str) -> QueryResponse:
-        """Process query with simple context building"""
+        """Process query with context only when file-related"""
         try:
             query_lower = query.lower().strip()
             
@@ -33,7 +54,18 @@ class QueryService:
                     is_code_related=False
                 )
 
-            # Load files if needed
+            # Check if query is file-related
+            is_file_related = self._is_file_related_query(query)
+            
+            if not is_file_related:
+                # Direct LLM query without context for non-file queries
+                answer = self.ollama.get_response(query, "")
+                return QueryResponse(
+                    answer=answer,
+                    is_code_related=False
+                )
+
+            # For file-related queries, use vector DB and context
             if not self._file_cache and os.path.exists(self.tracking_dir):
                 for file in os.listdir(self.tracking_dir):
                     if file.endswith('.py'):
@@ -43,20 +75,14 @@ class QueryService:
                         except Exception as e:
                             logger.error(f"Error reading {file}: {e}")
 
-            # Get response with or without context
-            is_code_query = any(kw in query_lower for kw in self._code_keywords)
-            context = ""
-            if is_code_query and self._file_cache:
-                context = "\n".join(f"File: {f}\n{c}" for f, c in self._file_cache.items())
-
+            # Build context for file-related queries
+            context = "\n".join(f"File: {f}\n{c}" for f, c in self._file_cache.items())
             answer = self.ollama.get_response(query, context)
-            if not answer:
-                answer = "I apologize, but I couldn't generate a response. Please try rephrasing your question."
 
             return QueryResponse(
                 answer=answer,
-                is_code_related=is_code_query,
-                relevant_files=list(self._file_cache.keys()) if is_code_query else []
+                is_code_related=True,
+                relevant_files=list(self._file_cache.keys())
             )
 
         except Exception as e:

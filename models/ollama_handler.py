@@ -16,8 +16,18 @@ class OllamaHandler:
     def get_response(self, query: str, context: str = "") -> str:
         """Stream response and return final text"""
         try:
-            system_prompt = "You are a code assistant. Provide clear, concise answers."
-            full_prompt = f"{system_prompt}\n\nContext:\n{context}\n\nQuery: {query}\n\nResponse:"
+            system_prompt = """You are an AI assistant with access to conversation history and code context.
+            Use the provided context to give more relevant and consistent responses.
+            If referring to past conversations or code, be explicit about it."""
+            
+            full_prompt = f"""System: {system_prompt}
+
+Context:
+{context}
+
+Current Query: {query}
+
+Response:"""
             
             # Initialize response collection
             full_response = []
