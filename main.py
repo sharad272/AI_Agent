@@ -29,8 +29,24 @@ def main():
             
             response = query_service.process_query(query)
             print(f"\nAnswer: {response.answer}")
+            
+            # Handle code edits if present
+            if response.code_edits:
+                print("\nProposed code changes:")
+                for edit in response.code_edits:
+                    print(f"\nFile: {edit.file_path}")
+                    print("Content:")
+                    print(edit.content)
+                
+                confirm = input("\nApply these changes? (y/n): ").lower()
+                if confirm == 'y':
+                    results = query_service.apply_code_edits(response.code_edits)
+                    print("\nResults:")
+                    for file, status in results.items():
+                        print(f"{file}: {status}")
+            
             if response.relevant_files:
-                print(f"Referenced files: {', '.join(response.relevant_files)}")
+                print(f"\nReferenced files: {', '.join(response.relevant_files)}")
 
     except Exception as e:
         print(f"\nError: {e}")
