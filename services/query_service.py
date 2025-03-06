@@ -84,7 +84,6 @@ class QueryService:
                 is_code_related=True,
                 relevant_files=list(self._file_cache.keys())
             )
-
         except Exception as e:
             logger.error(f"Query processing error: {e}")
             return QueryResponse(f"Error processing query: {str(e)}")
