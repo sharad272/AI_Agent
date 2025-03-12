@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 class VSCodeBridge:
     def __init__(self):
         self.query_service = QueryService(None)
+        self.conversation_history = []  # Add conversation memory
     
     def process_files(self, files_data):
         """Process files from VSCode and update vector DB"""
@@ -42,7 +43,12 @@ class VSCodeBridge:
                     print("Files processed and embeddings updated")
                 elif data.get('command') == 'query':
                     query = data.get('text')
-                    result = self.query_service.process_query(query)
+                    # Add query to history
+                    self.conversation_history.append({"role": "user", "content": query})
+                    # Pass history to query service
+                    result = self.query_service.process_query(query, conversation_history=self.conversation_history)
+                    # Add response to history
+                    self.conversation_history.append({"role": "assistant", "content": result})
                     print(f"\nAnswer: {result}")
                 
                 sys.stdout.flush()
