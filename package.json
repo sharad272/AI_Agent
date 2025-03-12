@@ -1,8 +1,8 @@
 {
-    "name": "ai-agent",
-    "displayName": "AI Agent",
-    "description": "AI Code Assistant Extension",
-    "version": "0.0.1",
+    "name": "jarvis-code-assistant",
+    "displayName": "Jarvis Code Assistant",
+    "description": "AI-powered code assistant with streaming responses",
+    "version": "0.1.0",
     "engines": {
         "vscode": "^1.60.0"
     },
@@ -10,22 +10,32 @@
         "Other"
     ],
     "activationEvents": [
-        "onCommand:aiagent.openInterface"
+        "onCommand:aiagent.openJarvis"
     ],
     "main": "./extension.js",
     "contributes": {
         "commands": [
             {
-                "command": "aiagent.openInterface",
-                "title": "Open AI Agent Interface"
+                "command": "aiagent.openJarvis",
+                "title": "Open Jarvis Code Assistant"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "aiagent.openJarvis",
+                "key": "ctrl+shift+a",
+                "mac": "cmd+shift+a"
             }
         ]
     },
     "scripts": {
-        "test": "node ./test/runTest.js"
+        "lint": "eslint ."
+    },
+    "dependencies": {
+        "node-fetch": "^2.6.1"
     },
     "devDependencies": {
         "@types/vscode": "^1.60.0",
-        "@types/node": "^14.x.x"
+        "eslint": "^7.27.0"
     }
 }
