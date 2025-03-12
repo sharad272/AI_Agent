@@ -1,41 +1,45 @@
-# AI Code Assistant
+# Jarvis Code Assistant
 
-An intelligent code assistant powered by Ollama and FAISS vector database that provides code understanding, querying, and analysis capabilities.
+An intelligent VSCode extension powered by Ollama and FAISS vector database that provides real-time code understanding and assistance.
 
 ## Features
 
-- **Vector Similarity Search**: Uses FAISS for efficient code context search
-- **File Management**: Reads and processes multiple file types (.py, .js, .ts, .java, .cpp, .json, .md, .txt)
-- **Real-time Monitoring**: Watches for file changes and updates context automatically
-- **Intelligent Response**: Uses Ollama's Deepseek model for code understanding
-- **Error Handling**: Robust error handling across file operations and model interactions
+- **Smart Context Understanding**: Uses FAISS vector DB for efficient code context search
+- **Real-time Streaming**: Provides streaming responses for better interaction
+- **File Monitoring**: Automatically tracks and indexes workspace files
+- **Memory Context**: Maintains conversation history for contextual responses
+- **Multi-language Support**: Works with Python, JavaScript, TypeScript, HTML, CSS, and more
+- **Error Handling**: Robust error handling across all operations
 
 ## Prerequisites
 
 - Python 3.8+
+- VSCode 1.60.0+
 - Ollama with deepseek-r1:1.5b model
-- Required Python packages (see requirements.txt)
+- Node.js and npm
 
 ## Project Structure
 
 ```
-AI_Agent/
+jarvis-code-assistant/
+├── services/
+│   ├── vscode_bridge.py     # Bridge between VSCode and Python
+│   ├── query_service.py     # Query processing and context management
+│   └── workspace-service.ts # Workspace file management
 ├── models/
-│   └── ollama_handler.py    # Manages Ollama model interactions
-├── utils/
-│   └── file_reader.py       # Handles file operations and monitoring
+│   └── ollama_handler.py    # Ollama model integration
 ├── vectordb/
-│   └── faiss_db.py         # FAISS vector database implementation
-├── main.py                  # Application entry point
-└── requirements.txt         # Project dependencies
+│   └── faiss_db.py         # Vector database implementation
+├── extension.js            # VSCode extension main file
+├── main.py                # Python backend entry point
+└── package.json           # Extension manifest
 ```
 
 ## Installation
 
-1. Install dependencies:
+1. Install Python dependencies:
 ```bash
 pip install -r requirements.txt
-```
 
 2. Install Ollama and pull the model:
 ```bash
