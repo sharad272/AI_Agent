@@ -2,6 +2,7 @@ const vscode = require('vscode');
 const fetch = require('node-fetch');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 // Ollama API handler
 class OllamaHandler {
@@ -100,13 +101,52 @@ class PythonBridge {
             return;
         }
 
-        // Get all open editor files
-        const openEditors = vscode.window.visibleTextEditors;
-        const editorFiles = openEditors.map(editor => ({
-            filePath: editor.document.fileName,
-            content: editor.document.getText(),
-            language: editor.document.languageId
-        }));
+        // Get all open editor files and temp-tracking files
+        const editorFiles = [];
+
+        // 1. Get currently visible editors
+        vscode.window.visibleTextEditors.forEach(editor => {
+            if (editor.document.uri.scheme === 'file') {
+                editorFiles.push({
+                    filePath: editor.document.fileName,
+                    content: editor.document.getText(),
+                    language: editor.document.languageId
+                });
+            }
+        });
+
+        // 2. Get all open text documents (includes background editors)
+        vscode.workspace.textDocuments.forEach(doc => {
+            if (doc.uri.scheme === 'file' && 
+                !editorFiles.some(f => f.filePath === doc.fileName)) {
+                editorFiles.push({
+                    filePath: doc.fileName,
+                    content: doc.getText(),
+                    language: doc.languageId
+                });
+            }
+        });
+
+        // 3. Save to temp-tracking (limit to 10 files)
+        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (workspacePath) {
+            const trackingPath = path.join(workspacePath, 'temp-tracking');
+            if (!fs.existsSync(trackingPath)) {
+                fs.mkdirSync(trackingPath, { recursive: true });
+            }
+
+            // Take up to 10 most recent files
+            const recentFiles = editorFiles.slice(0, 10);
+            recentFiles.forEach(file => {
+                const fileName = path.basename(file.filePath);
+                fs.writeFileSync(
+                    path.join(trackingPath, fileName),
+                    file.content
+                );
+            });
+
+            log(`Saved ${recentFiles.length} files to temp-tracking`);
+        }
         
         log(`Found ${editorFiles.length} open files to index`);
 
@@ -119,7 +159,7 @@ class PythonBridge {
                 env: { 
                     ...process.env, 
                     PYTHONUNBUFFERED: '1',
-                    OPEN_FILES: JSON.stringify(editorFiles)  // Pass files to Python
+                    OPEN_FILES: JSON.stringify(editorFiles.slice(0, 10))  // Pass up to 10 files
                 }
             });
             log('Python process started successfully');
