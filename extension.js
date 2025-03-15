@@ -4,19 +4,13 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-// Ollama API handler
+// Ollama API handler - Simplified to just handle prompts
 class OllamaHandler {
     constructor(baseUrl) {
         this.baseUrl = baseUrl;
     }
 
-    async generateResponse(prompt, files) {
-        const context = files.map(file => 
-            `File: ${file.fileName}\nContent:\n${file.content}\n`
-        ).join('\n');
-
-        const fullPrompt = `Context:\n${context}\n\nQuery: ${prompt}`;
-
+    async generateResponse(prompt) {
         try {
             const response = await fetch(`${this.baseUrl}/api/generate`, {
                 method: 'POST',
@@ -25,11 +19,10 @@ class OllamaHandler {
                 },
                 body: JSON.stringify({
                     model: 'deepseek-r1:1.5b',
-                    prompt: fullPrompt,
+                    prompt: prompt,
                     stream: true
                 })
             });
-
             return response.body;
         } catch (error) {
             throw new Error(`Failed to connect to Ollama: ${error.message}`);
@@ -41,14 +34,14 @@ class OllamaHandler {
 async function processStreamingResponse(stream, panel) {
     const reader = stream.getReader();
     let accumulatedResponse = '';
-    const textDecoder = new TextDecoder();  // Create TextDecoder instance here
+    const textDecoder = new TextDecoder();
 
     try {
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const text = textDecoder.decode(value, { stream: true });  // Use the decoder with streaming option
+            const text = textDecoder.decode(value, { stream: true });
             const lines = text.split('\n').filter(line => line.trim());
 
             for (const line of lines) {
@@ -88,7 +81,7 @@ function log(message, type = 'info') {
     }
 }
 
-// Add this after OllamaHandler class
+// Simplified PythonBridge class - only handles initialization and queries
 class PythonBridge {
     constructor() {
         this.pythonProcess = null;
@@ -101,55 +94,6 @@ class PythonBridge {
             return;
         }
 
-        // Get all open editor files and temp-tracking files
-        const editorFiles = [];
-
-        // 1. Get currently visible editors
-        vscode.window.visibleTextEditors.forEach(editor => {
-            if (editor.document.uri.scheme === 'file') {
-                editorFiles.push({
-                    filePath: editor.document.fileName,
-                    content: editor.document.getText(),
-                    language: editor.document.languageId
-                });
-            }
-        });
-
-        // 2. Get all open text documents (includes background editors)
-        vscode.workspace.textDocuments.forEach(doc => {
-            if (doc.uri.scheme === 'file' && 
-                !editorFiles.some(f => f.filePath === doc.fileName)) {
-                editorFiles.push({
-                    filePath: doc.fileName,
-                    content: doc.getText(),
-                    language: doc.languageId
-                });
-            }
-        });
-
-        // 3. Save to temp-tracking (limit to 10 files)
-        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (workspacePath) {
-            const trackingPath = path.join(workspacePath, 'temp-tracking');
-            if (!fs.existsSync(trackingPath)) {
-                fs.mkdirSync(trackingPath, { recursive: true });
-            }
-
-            // Take up to 10 most recent files
-            const recentFiles = editorFiles.slice(0, 10);
-            recentFiles.forEach(file => {
-                const fileName = path.basename(file.filePath);
-                fs.writeFileSync(
-                    path.join(trackingPath, fileName),
-                    file.content
-                );
-            });
-
-            log(`Saved ${recentFiles.length} files to temp-tracking`);
-        }
-        
-        log(`Found ${editorFiles.length} open files to index`);
-
         const scriptPath = path.join(__dirname, 'main.py');
         log(`Starting Python process with script: ${scriptPath}`);
         
@@ -158,13 +102,12 @@ class PythonBridge {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: { 
                     ...process.env, 
-                    PYTHONUNBUFFERED: '1',
-                    OPEN_FILES: JSON.stringify(editorFiles.slice(0, 10))  // Pass up to 10 files
+                    PYTHONUNBUFFERED: '1'
                 }
             });
             log('Python process started successfully');
 
-            // Handle stdout for initialization feedback
+            // Handle stdout
             this.pythonProcess.stdout.on('data', (data) => {
                 const output = data.toString().trim();
                 if (output) {
@@ -172,12 +115,9 @@ class PythonBridge {
                 }
             });
 
-            // Handle process errors
+            // Handle errors
             this.pythonProcess.on('error', (err) => {
                 log(`Failed to start Python process: ${err.message}`, 'error');
-                if (err.code === 'ENOENT') {
-                    log('Python (py) command not found. Please ensure Python is installed and in PATH', 'error');
-                }
             });
 
             this.pythonProcess.stderr.on('data', (data) => {
@@ -206,12 +146,8 @@ class PythonBridge {
                 
                 const outputHandler = (data) => {
                     const output = data.toString();
-                    log(`[Python Raw] ${output.trim()}`);
-
-                    // Handle raw response format from main.py
                     if (output.includes('Answer:')) {
                         isAnswer = true;
-                        // Get everything after "Answer:" including newlines
                         const answerPart = output.split('Answer:')[1];
                         if (answerPart) {
                             currentResponse = answerPart;
@@ -219,133 +155,25 @@ class PythonBridge {
                         }
                     } 
                     else if (isAnswer && output.trim()) {
-                        // Append to current response and stream
                         currentResponse = output;
                         this.emit('stream', currentResponse);
                     }
-                    // Log other outputs but don't stream them
-                    else if (output.trim()) {
-                        log(`[Python Debug] ${output.trim()}`);
-                    }
-                    
-                    buffer += output;
                 };
-
-                // Add event emitter for streaming
-                this.emit = (type, content) => {
-                    if (this.onStream && content.trim()) {
-                        this.onStream(type, content);
-                    }
-                };
-
+                
                 this.pythonProcess.stdout.on('data', outputHandler);
-
-                // Send just the query
-                this.pythonProcess.stdin.write(query + '\n');
-
-                // Wait for complete response
-                const responseTimeout = setTimeout(() => {
-                    this.pythonProcess.stdout.removeListener('data', outputHandler);
-                    resolve({
-                        type: 'unparsed',
-                        content: currentResponse || buffer
-                    });
-                }, 1000);
-
-                // Error handling
-                this.pythonProcess.stderr.once('data', (data) => {
-                    clearTimeout(responseTimeout);
-                    this.pythonProcess.stdout.removeListener('data', outputHandler);
-                    const error = data.toString().trim();
-                    log(`Error from Python: ${error}`, 'error');
-                    reject(new Error(error));
-                });
-
-            } catch (e) {
-                log(`Error in processQuery: ${e.message}`, 'error');
-                reject(e);
+                
+                // Send query to Python process
+                this.pythonProcess.stdin.write(
+                    JSON.stringify({
+                        command: 'query',
+                        text: query
+                    }) + '\n'
+                );
+                
+            } catch (error) {
+                reject(error);
             }
         });
-    }
-
-    setupResponseHandler(panel) {
-        this.pythonProcess.stdout.on('data', (data) => {
-            const output = data.toString();
-            
-            // Handle different Python stdout formats
-            if (output.includes('Answer:')) {
-                const answer = output.split('Answer:')[1].trim();
-                panel.webview.postMessage({
-                    type: 'stream',
-                    content: answer
-                });
-                // Send streamComplete after answer
-                panel.webview.postMessage({
-                    type: 'streamComplete'
-                });
-            } else if (output.trim()) {
-                // Handle unparsed output
-                panel.webview.postMessage({
-                    type: 'stream',
-                    content: output
-                });
-            }
-        });
-
-        this.pythonProcess.stderr.on('data', (data) => {
-            const error = data.toString().trim();
-            if (error) {
-                log(`[Python Error] ${error}`, 'error');
-                panel.webview.postMessage({
-                    type: 'error',
-                    content: error
-                });
-            }
-        });
-    }
-}
-
-// Update the processQuery function to include file context
-async function processQuery(query, panel) {
-    log('Starting query processing');
-    const bridge = new PythonBridge();
-    
-    try {
-        log('Initializing Python bridge');
-        await bridge.initialize();
-
-        // Set up streaming handler
-        bridge.onStream = (type, content) => {
-            if (type === 'stream') {
-                panel.webview.postMessage({
-                    type: 'stream',
-                    content: content
-                });
-            }
-        };
-
-        // Send query - vector DB will handle context
-        log('Sending query to bridge');
-        const command = {
-            command: 'query',
-            text: query
-        };
-        const response = await bridge.processQuery(JSON.stringify(command));
-        
-        // Send streamComplete to re-enable input
-        panel.webview.postMessage({
-            type: 'streamComplete'
-        });
-
-        return response;
-    } catch (error) {
-        const errorMsg = `Failed to process query: ${error.message}`;
-        log(errorMsg, 'error');
-        panel.webview.postMessage({
-            type: 'error',
-            content: error.message
-        });
-        throw new Error(errorMsg);
     }
 }
 
