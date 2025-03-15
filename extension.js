@@ -9,25 +9,6 @@ class OllamaHandler {
     constructor(baseUrl) {
         this.baseUrl = baseUrl;
     }
-
-    async generateResponse(prompt) {
-        try {
-            const response = await fetch(`${this.baseUrl}/api/generate`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: 'deepseek-r1:1.5b',
-                    prompt: prompt,
-                    stream: true
-                })
-            });
-            return response.body;
-        } catch (error) {
-            throw new Error(`Failed to connect to Ollama: ${error.message}`);
-        }
-    }
 }
 
 // Process the streaming response
