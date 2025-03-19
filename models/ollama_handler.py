@@ -2,76 +2,104 @@ import ollama
 import logging
 import re
 import sys
+import json
+import time
+import io
 
 logger = logging.getLogger(__name__)
 
 class OllamaHandler:
-    def __init__(self, model="deepseek-r1:1.5b"):
-        self.model = model
+    def __init__(self):
+        self.model = "deepseek-r1:1.5b"
         self.config = {
             "temperature": 0.7,
             "num_predict": 1000,
             "stream": True
         }
+        
+        # Ensure stdout uses UTF-8 encoding
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+        else:
+            # For older Python versions
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-    def get_response(self, query: str, context: str = "", user_info: dict = None) -> str:
-        """Stream response and return final text"""
+    def get_response(self, query: str, context: str = "", conversation_history: str = "") -> str:
+        """Stream response from LLM with context and memory"""
         try:
-            system_prompt = """You are an AI assistant with access to conversation history and code context.
-            Pay attention to names and personal details mentioned in conversations.
-            Remember and refer to people by their names when mentioned.
-            Maintain a natural conversational flow while being consistent with previously shared information.
-            If someone was mentioned before, acknowledge that you remember them."""
-            
-            # Format context to highlight user information
-            user_context = ""
-            if user_info:
-                user_context = "User Information:\n"
-                for key, value in user_info.items():
-                    user_context += f"- {key}: {value}\n"
+            logger.debug(f"[OllamaHandler] Starting response for query: {query[:100]}...")
+            response_text = ""
 
-            full_prompt = f"""System: {system_prompt}
-
-{user_context}
-Conversation History:
+            # Format prompt
+            full_prompt = f"""Context:
 {context}
 
-Current Query: {query}
+Query: {query}"""
 
-Response:"""
-            
-            # Initialize response collection
-            full_response = []
-            
-            # Stream the response using chat API
-            for chunk in ollama.chat(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": full_prompt
-                    }
-                ],
-                stream=True
-            ):
-                if 'message' in chunk:
-                    text = chunk['message']['content']
-                    sys.stdout.write(text)
-                    sys.stdout.flush()
-                    full_response.append(text)
+            logger.debug("[OllamaHandler] Sending request to Ollama")
+            try:
+                # Stream response with timeout
+                for chunk in ollama.chat(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an AI code assistant. Provide clear and concise responses."
+                        },
+                        {
+                            "role": "user",
+                            "content": full_prompt
+                        }
+                    ],
+                    stream=True
+                ):
+                    if 'message' in chunk:
+                        text = chunk['message']['content']
+                        response_text += text
+                        
+                        # Ensure proper UTF-8 encoding when writing to stdout
+                        try:
+                            sys.stdout.write(text)
+                            sys.stdout.flush()
+                        except UnicodeEncodeError as e:
+                            # Handle encoding errors by replacing problematic characters
+                            safe_text = text.encode('utf-8', errors='replace').decode('utf-8')
+                            sys.stdout.write(safe_text)
+                            sys.stdout.flush()
+                            logger.warning(f"[OllamaHandler] Replaced problematic characters in output")
+                            
+                        logger.debug("[OllamaHandler] Received chunk")
 
-            # Add final newline
+            except Exception as e:
+                logger.error(f"[OllamaHandler] Error during streaming: {str(e)}")
+                raise
+
             sys.stdout.write('\n')
             sys.stdout.flush()
             
-            # Join all chunks and return
-            final_response = ''.join(full_response)
-            return final_response.strip()
+            logger.debug("[OllamaHandler] Response completed")
+            return response_text
 
         except Exception as e:
-            logger.error(f"Error getting response: {e}")
-            return f"Error: {str(e)}"
+            error_msg = f"Error: {str(e)}"
+            logger.error(f"[OllamaHandler] {error_msg}")
+            
+            # Ensure error message is properly encoded
+            try:
+                print(error_msg)
+            except UnicodeEncodeError:
+                print("Error: Encoding issue with response")
+                
+            sys.stdout.flush()
+            return error_msg
+
+def process_streaming_data(data):
+    try:
+        # Ensure the data is decoded using UTF-8
+        text = data.decode('utf-8')
+        # Process the text as needed
+        # ...
+    except UnicodeEncodeError as e:
+        log(f"[OllamaHandler] Error during streaming: {str(e)}", 'error')
+        # Handle the error appropriately
+        # ...

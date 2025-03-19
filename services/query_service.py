@@ -5,6 +5,9 @@ import os
 from datetime import datetime
 import re
 import logging
+from utils.code_processor import CodeProcessor
+import sys
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +24,26 @@ class QueryResponse:
     relevant_files: List[str] = None
     conversation_id: str = None
     code_edits: List[CodeEdit] = None
+    chain_of_thought: str = None
 
 class QueryService:
-    def __init__(self, tracking_dir: str):
+    def __init__(self, vector_db=None):
         self.ollama = OllamaHandler()
-        self.tracking_dir = tracking_dir
-        self._file_cache = {}
+        self.vector_db = vector_db
+        self._conversation_history = []
+        self._max_history = 5
+        self.code_processor = CodeProcessor()  # Initialize once
         self._quick_responses = {
-            'hi': 'Hello! How can I help you?',
-            'hello': 'Hi! Ready to assist you.',
-            'help': 'I can help you with code analysis and questions.'
+            'hi': 'Hello! I\'m your AI code assistant. How can I help you?',
+            'hello': 'Hi! Ready to assist with your code questions.',
+            'hey': 'Hey there! What can I help you with?',
+            'help': 'I can help you with:\n- Code analysis\n- Explaining code\n- Finding relevant files\n- Answering coding questions',
+            'thanks': 'You\'re welcome!',
+            'thank you': 'You\'re welcome!',
+            'bye': 'Goodbye!',
+            'exit': 'Closing the session.'
         }
+        self._file_cache = {}
         self._code_keywords = {'code', 'file', 'function', 'class', 'explain'}
         self._file_related_keywords = {
             'file', 'code', 'function', 'class', 
@@ -40,8 +52,6 @@ class QueryService:
             'meaning', 'context', 'inside',
             'create', 'new', 'make', 'add'
         }
-        self._conversation_history = []
-        self._max_history = 5
         self._user_info = {}  # Add this to store user details
         self._code_block_pattern = r"```(\w+):?(.*?)\n(.*?)```"
 
@@ -201,90 +211,56 @@ class QueryService:
             logger.error(f"Error creating file {file_path}: {e}")
             return False
 
-    def process_query(self, query: str) -> QueryResponse:
-        """Process query with enhanced context awareness"""
+    def check_quick_response(self, query: str) -> str:
+        """Check if query has a quick response"""
+        query_lower = query.lower().strip()
+        return self._quick_responses.get(query_lower)
+
+    def process_query(self, query: str) -> str:
         try:
-            # Update user info based on query
-            self._update_user_info(query)
-            
-            query_lower = query.lower().strip()
-            
-            # Handle quick responses
-            if query_lower in self._quick_responses:
-                response = self._quick_responses[query_lower]
-                self._add_to_history(query, response)
-                return QueryResponse(
-                    answer=response,
-                    is_code_related=False
-                )
+            # Quick response check first
+            quick_response = self.check_quick_response(query)
+            if quick_response:
+                print("<think>Using quick response</think>")
+                sys.stdout.flush()
+                print(f"Answer: {quick_response}")
+                sys.stdout.flush()
+                return quick_response
 
-            # Get conversation context with user info
-            conversation_context = self._get_conversation_context()
-            
-            if not self._is_file_related_query(query):
-                answer = self.ollama.get_response(
-                    query, 
-                    conversation_context,
-                    self._user_info  # Pass user info to Ollama
-                )
-                self._add_to_history(query, answer)
-                return QueryResponse(
-                    answer=answer,
-                    is_code_related=False
-                )
+            # Show thinking process
+            print("<think>Processing query through LLM...</think>")
+            sys.stdout.flush()
 
-            # For file-related queries, use vector DB and context
-            if not self._file_cache and os.path.exists(self.tracking_dir):
-                for file in os.listdir(self.tracking_dir):
-                    if file.endswith('.py'):
-                        try:
-                            with open(os.path.join(self.tracking_dir, file), 'r', encoding='utf-8', errors='ignore') as f:
-                                self._file_cache[file] = f.read()
-                        except Exception as e:
-                            logger.error(f"Error reading {file}: {e}")
+            # Get conversation history
+            conversation_history = self._get_conversation_context()
 
-            # Build context combining file content and conversation history
-            file_context = "\n".join(f"File: {f}\n{c}" for f, c in self._file_cache.items())
-            conversation_context = self._get_conversation_context()
-            combined_context = f"{conversation_context}\n\nCode Context:\n{file_context}"
-            
-            # Check for file creation request
-            if any(kw in query_lower for kw in ['create file', 'new file', 'make file']):
-                # Let the LLM handle the file creation response
-                answer = self.ollama.get_response(
-                    query + "\nPlease provide the code in a markdown code block with the file path like: ```python:path/to/file```", 
-                    conversation_context
-                )
-                self._add_to_history(query, answer)
-                
-                # Extract code edits (which include new files)
-                code_edits = self._extract_code_edits(answer)
-                
-                # Create new files from the code edits
-                created_files = []
-                for edit in code_edits:
-                    if self.create_new_file(edit.file_path, edit.content):
-                        created_files.append(edit.file_path)
-                
-                return QueryResponse(
-                    answer=answer,
-                    is_code_related=True,
-                    relevant_files=created_files,
-                    code_edits=code_edits
-                )
+            # Get context from vector DB if available (only search, no indexing)
+            context = ""
+            if self.vector_db:
+                print("<think>Finding relevant code context...</think>")
+                sys.stdout.flush()
+                # Just search the already indexed files
+                relevant_files = self.vector_db.search(query, k=5)
+                for file_path, score in relevant_files:
+                    if score > 0.4:
+                        with open(file_path, 'r') as f:
+                            file_content = f.read()
+                            context += f"\nFile: {file_path}\n{file_content}\n"
 
-            answer = self.ollama.get_response(query, combined_context)
-            self._add_to_history(query, answer)
-            
-            # Extract code edits from the response
-            code_edits = self._extract_code_edits(answer)
-            
-            return QueryResponse(
-                answer=answer,
-                is_code_related=True,
-                relevant_files=list(self._file_cache.keys()),
-                code_edits=code_edits
+            # Send to LLM
+            print("Answer:", end='')
+            sys.stdout.flush()
+            response = self.ollama.get_response(
+                query=query,
+                context=context,
+                conversation_history=conversation_history
             )
+
+            return response
+
         except Exception as e:
-            logger.error(f"Query processing error: {e}")
-            return QueryResponse(f"Error processing query: {str(e)}")
+            error_msg = f"Error processing query: {str(e)}"
+            logger.error(error_msg)
+            print(f"<think>{error_msg}</think>")
+            sys.stdout.flush()
+            return error_msg

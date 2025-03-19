@@ -22,27 +22,50 @@ class Document:
     doc_type: str = "code"  # code, conversation, or memory
 
 class FAISSManager:
-    def __init__(self, dimension=384, n_lists=4):  # Reduced n_lists for small datasets
-        self.dimension = dimension
-        self.storage_path = os.path.join(os.getcwd(), "vector_store")
-        self.index_path = os.path.join(self.storage_path, "faiss.index")
-        self.metadata_path = os.path.join(self.storage_path, "metadata.pkl")
-        
-        if not os.path.exists(self.storage_path):
-            os.makedirs(self.storage_path)
+    def __init__(self, dimension=384, n_lists=1):
+        try:
+            logger.info("Initializing FAISS Manager...")
+            self.dimension = dimension
+            self.storage_path = os.path.join(os.getcwd(), "vectordb")
+            self.index_path = os.path.join(self.storage_path, "faiss.index")
+            self.metadata_path = os.path.join(self.storage_path, "metadata.pkl")
             
-        if self._load_from_disk():
-            logger.info("Loaded existing FAISS index from disk")
-        else:
-            # Initialize new index
-            self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
-            self.index = faiss.IndexFlatL2(dimension)
-            self.document_store = {}  # Add missing initialization
-            self.trained = False
+            # Initialize basic structures
+            self.document_store = {}
             self.file_paths = []
             self.embeddings = {}
-            self.buffer_size = 100  # Reduced buffer size
             self._embedding_buffer = []
+            self.buffer_size = 50
+            self._encoder = None  # Lazy load
+            
+            # Add missing attributes
+            self.trained = False
+            self.use_ivf = False
+            
+            # Create storage directory if needed
+            if not os.path.exists(self.storage_path):
+                os.makedirs(self.storage_path)
+            
+            # Create minimal FAISS index
+            self.index = faiss.IndexFlatL2(dimension)
+            
+            # Load existing index if available
+            if os.path.exists(self.index_path):
+                self._load_from_disk()
+            
+            logger.info("Basic FAISS initialization complete")
+            
+        except Exception as e:
+            logger.error(f"Error initializing FAISS Manager: {e}")
+            raise
+
+    @property
+    def encoder(self):
+        """Lazy load the encoder only when needed"""
+        if self._encoder is None:
+            logger.info("Loading sentence transformer model...")
+            self._encoder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+        return self._encoder
 
     def _load_from_disk(self) -> bool:
         """Load index and metadata from disk"""
@@ -60,8 +83,7 @@ class FAISSManager:
                     self.trained = metadata.get('trained', False)
                     self.use_ivf = metadata.get('use_ivf', False)
                 
-                # Initialize encoder
-                self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
+                # Remove direct encoder initialization - it will be lazy loaded when needed
                 return True
         except Exception as e:
             logger.error(f"Error loading index from disk: {e}")
@@ -151,22 +173,30 @@ class FAISSManager:
         self.index.add(embeddings_array)
         logger.info(f"Created FAISS index with {len(embeddings)} documents")
     
-    def add_file(self, filepath: str, content: str):
-        """Optimized file addition with batching"""
+    def add_file(self, filepath: str, content: str, language: str = None):
+        """Add file with optimized processing"""
         try:
-            # Generate embedding
+            logger.debug(f"Adding file to vector DB: {filepath}")
+            # Generate embedding using SentenceTransformer
             embedding = self.encoder.encode([content])[0]
             
-            # Add to buffer
+            # Add to buffer for batch processing
             self._embedding_buffer.append(embedding)
             self.file_paths.append(filepath)
             self.embeddings[filepath] = embedding
+            self.document_store[filepath] = {
+                'language': language,
+                'timestamp': datetime.now()
+            }
             
-            # Process buffer if full
+            # Process buffer if full - this is where actual indexing happens
             if len(self._embedding_buffer) >= self.buffer_size:
-                self._process_buffer()
-                self._save_to_disk()  # Save after processing batch
+                logger.debug("Processing embedding buffer...")
+                self._process_buffer()  # This adds embeddings to FAISS index
+                self._save_to_disk()    # This saves the index to disk
                 
+            logger.debug(f"Successfully added file: {filepath}")
+            
         except Exception as e:
             logger.error(f"Error adding file to FAISS: {e}")
 
@@ -234,36 +264,27 @@ class FAISSManager:
             logger.error(f"Error refreshing index: {e}")
             self._is_initialized = False
     
-    def search(self, query: str, k: int = 3) -> List[Tuple[str, float]]:
-        """Optimized search with trained index"""
+    def search(self, query: str, k: int = 2) -> List[Tuple[str, float]]:
+        """Optimized search in vector DB"""
         try:
-            # Process any remaining buffered embeddings
-            self._process_buffer()
-            
-            if not self.trained or len(self.file_paths) == 0:
-                return []
-
             # Generate query embedding
-            query_vector = self.encoder.encode([query])[0].reshape(1, -1).astype('float32')
+            query_vector = self.encoder.encode([query])[0].reshape(1, -1)
             
-            # Adjust k to available items
-            k = min(k, len(self.file_paths))
-            if k == 0:
-                return []
-            
-            # Perform search
+            # Use approximate search for faster results
             distances, indices = self.index.search(query_vector, k)
             
+            # Get results
             results = []
-            for idx, dist in zip(indices[0], distances[0]):
-                if idx >= 0 and idx < len(self.file_paths):
-                    similarity = 1 / (1 + dist)
-                    results.append((self.file_paths[idx], similarity))
+            for i, dist in zip(indices[0], distances[0]):
+                if i != -1:  # Valid index
+                    file_path = self.file_paths[i]
+                    # Convert distance to similarity score
+                    score = 1 / (1 + dist)
+                    results.append((file_path, score))
             
             return results
-
         except Exception as e:
-            logger.error(f"Error searching FAISS: {e}")
+            logger.error(f"Search error: {e}")
             return []
 
     def search_by_type(self, query: str, doc_type: str = None, k: int = 3) -> List[Tuple[str, float, dict]]:
@@ -286,3 +307,47 @@ class FAISSManager:
             self._save_to_disk()
         except:
             pass
+
+    def flush(self):
+        """Force process any remaining embeddings in buffer"""
+        if self._embedding_buffer:
+            logger.info(f"Flushing {len(self._embedding_buffer)} remaining embeddings to index")
+            self._process_buffer()
+            self._save_to_disk()
+
+    def add_to_index(self, filepath: str, embedding: np.ndarray, language: str = None):
+        """Add pre-generated embedding to index - optimized version"""
+        try:
+            # Add directly to index if buffer is full
+            if len(self._embedding_buffer) >= self.buffer_size:
+                vectors = np.array(self._embedding_buffer + [embedding]).astype('float32')
+                self.index.add(vectors)
+                self._embedding_buffer = []
+                self._save_to_disk()
+            else:
+                self._embedding_buffer.append(embedding)
+            
+            # Store metadata
+            self.file_paths.append(filepath)
+            self.embeddings[filepath] = embedding
+            self.document_store[filepath] = {
+                'language': language,
+                'timestamp': datetime.now()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error adding embedding to index: {e}")
+
+    def finalize_index(self):
+        """Finalize the index after all embeddings are added"""
+        try:
+            # Process any remaining embeddings
+            if self._embedding_buffer:
+                self._process_buffer()
+            
+            # Save to disk
+            self._save_to_disk()
+            logger.info(f"Finalized index with {len(self.file_paths)} files")
+            
+        except Exception as e:
+            logger.error(f"Error finalizing index: {e}")

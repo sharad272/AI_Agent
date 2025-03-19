@@ -69,11 +69,15 @@ class PythonBridge {
         log('PythonBridge initialized');
     }
 
-    initialize() {
+    async initialize() {
         if (this.pythonProcess) {
             log('Python process already running');
             return;
         }
+
+        // Get all open text editors
+        const openFiles = await this.getOpenFiles();
+        log(`Found ${openFiles.length} open files`);
 
         const scriptPath = path.join(__dirname, 'main.py');
         log(`Starting Python process with script: ${scriptPath}`);
@@ -86,8 +90,21 @@ class PythonBridge {
                     PYTHONUNBUFFERED: '1'
                 }
             });
-            log('Python process started successfully');
 
+            // Send initial files to Python process for embedding
+            this.pythonProcess.stdin.write(
+                JSON.stringify({
+                    command: 'initialize',
+                    files: openFiles.map(file => ({
+                        filePath: file.filePath,
+                        content: file.content,
+                        language: file.language
+                    }))
+                }) + '\n'
+            );
+
+            log(`Sent ${openFiles.length} files for initialization`);
+            
             // Handle stdout
             this.pythonProcess.stdout.on('data', (data) => {
                 const output = data.toString().trim();
@@ -114,51 +131,117 @@ class PythonBridge {
         }
     }
 
-    async processQuery(query) {
-        log(`Processing query: "${query.substring(0, 50)}..."`);
+    async getOpenFiles() {
+        const openFiles = [];
         
-        return new Promise((resolve, reject) => {
-            try {
-                log('Sending query to Python process');
-                
-                let buffer = '';
-                let isAnswer = false;
-                let currentResponse = '';
-                
-                const outputHandler = (data) => {
-                    const output = data.toString();
-                    if (output.includes('Answer:')) {
-                        isAnswer = true;
-                        const answerPart = output.split('Answer:')[1];
-                        if (answerPart) {
-                            currentResponse = answerPart;
-                            this.emit('stream', currentResponse);
+        try {
+            // Get files from workspace
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (workspaceFolders) {
+                for (const folder of workspaceFolders) {
+                    const files = await vscode.workspace.findFiles(
+                        new vscode.RelativePattern(folder, '**/*.{js,ts,py,java,cpp,jsx,tsx}'),
+                        '**/node_modules/**'
+                    );
+                    
+                    for (const file of files) {
+                        try {
+                            const document = await vscode.workspace.openTextDocument(file);
+                            if (this.isValidDocument(document)) {
+                                openFiles.push({
+                                    filePath: document.uri.fsPath,
+                                    content: document.getText(),
+                                    language: document.languageId
+                                });
+                            }
+                        } catch (err) {
+                            log(`Error reading file ${file.fsPath}: ${err.message}`, 'error');
                         }
-                    } 
-                    else if (isAnswer && output.trim()) {
-                        currentResponse = output;
-                        this.emit('stream', currentResponse);
                     }
-                };
-                
-                this.pythonProcess.stdout.on('data', outputHandler);
-                
-                // Send query to Python process
-                this.pythonProcess.stdin.write(
-                    JSON.stringify({
-                        command: 'query',
-                        text: query
-                    }) + '\n'
-                );
-                
-            } catch (error) {
-                reject(error);
+                }
+            }
+
+            // Also get currently open editors
+            vscode.window.visibleTextEditors.forEach(editor => {
+                if (this.isValidDocument(editor.document) && 
+                    !openFiles.some(f => f.filePath === editor.document.uri.fsPath)) {
+                    openFiles.push({
+                        filePath: editor.document.uri.fsPath,
+                        content: editor.document.getText(),
+                        language: editor.document.languageId
+                    });
+                }
+            });
+
+            log(`Found ${openFiles.length} valid files`);
+            return openFiles;
+        } catch (error) {
+            log(`Error getting open files: ${error.message}`, 'error');
+            return [];
+        }
+    }
+
+    isValidDocument(document) {
+        return document.uri.scheme === 'file' && 
+               !document.fileName.includes('node_modules') &&
+               !document.fileName.includes('.git');
+    }
+
+    setupResponseHandler(panel) {
+        if (!this.pythonProcess) return;
+
+        let isStreaming = false;
+
+        this.pythonProcess.stdout.on('data', (data) => {
+            const output = data.toString();
+            
+            // Skip thinking messages
+            if (output.includes('<think>')) {
+                return;
+            }
+
+            // Handle streaming response
+            if (output.startsWith('Answer:')) {
+                isStreaming = true;
+                const content = output.replace('Answer:', '');
+                panel.webview.postMessage({
+                    type: 'stream',
+                    content: content
+                });
+                return;
+            }
+
+            // Continue streaming if we're in streaming mode - send raw output
+            if (isStreaming && output) {
+                panel.webview.postMessage({
+                    type: 'stream',
+                    content: output
+                });
             }
         });
     }
+
+    async processQuery(query) {
+        if (!this.pythonProcess) {
+            throw new Error('Python process not initialized');
+        }
+
+        try {
+            this.pythonProcess.stdin.write(
+                JSON.stringify({
+            command: 'query',
+            text: query
+                }) + '\n'
+            );
+            log(`Sent query to Python: ${query}`);
+    } catch (error) {
+            log(`Error sending query: ${error.message}`, 'error');
+            throw error;
+        }
+    }
 }
 
-function activate(context) {
+async function activate(context) {
     log('Activating extension');
     let disposable = vscode.commands.registerCommand('aiagent.openJarvis', async () => {
         let bridge;
@@ -173,31 +256,43 @@ function activate(context) {
                 try {
                     progress.report({ message: "Starting Python backend..." });
                     bridge = new PythonBridge();
+                    
+                    // Initialize with progress updates
                     await bridge.initialize();
 
-                    // Wait for ready signal before creating webview
-                    await new Promise((resolve, reject) => {
-                        const initHandler = (data) => {
-                            const output = data.toString();
-                            if (output.includes("Ready! Waiting for queries...")) {
-                                bridge.pythonProcess.stdout.removeListener('data', initHandler);
+                    // Get open files and generate embeddings
+                    const openFiles = await bridge.getOpenFiles();
+                    progress.report({ message: `Indexing ${openFiles.length} files...` });
+                    
+                    // Send files for embedding and wait for indexing to complete
+                    await new Promise((resolve) => {
+                        bridge.pythonProcess.stdin.write(
+                            JSON.stringify({
+                                command: 'initialize',
+                                files: openFiles.map(file => ({
+                                    filePath: file.filePath,
+                                    content: file.content,
+                                    language: file.language
+                                }))
+                            }) + '\n'
+                        );
+                        
+                        // Wait for "ready" message from Python
+                        bridge.pythonProcess.stdout.on('data', (data) => {
+                            if (data.toString().includes("AI Assistant ready!")) {
                                 resolve();
                             }
-                            if (output.includes("Processing file:")) {
-                                progress.report({ message: output });
-                            }
-                        };
-                        
-                        bridge.pythonProcess.stdout.on('data', initHandler);
-                        setTimeout(() => reject(new Error('Initialization timeout')), 60000);
+                        });
                     });
+                    
+                    progress.report({ message: "Initialization complete" });
 
                 } catch (error) {
                     throw error;
                 }
             });
 
-            // Only create webview after successful initialization
+            // Only create webview after indexing is complete
             const panel = vscode.window.createWebviewPanel(
                 'jarvisInterface',
                 'Jarvis Code Assistant',
@@ -221,18 +316,21 @@ function activate(context) {
                     switch (message.command) {
                         case 'query':
                             try {
-                                if (bridge && bridge.pythonProcess) {
-                                    bridge.pythonProcess.stdin.write(message.text + '\n');
-                                    log(`Sent query to Python: ${message.text}`);
-                                } else {
-                                    throw new Error('Python process not initialized');
-                                }
+                                // Disable input while processing
+                                panel.webview.postMessage({ type: 'processing' });
+                                
+                                await bridge.processQuery(message.text);
+                                
+                                // Re-enable input after response
+                                panel.webview.postMessage({ type: 'streamComplete' });
                             } catch (error) {
-                                log(`Error sending query: ${error.message}`, 'error');
+                                log(`Error processing query: ${error.message}`, 'error');
                                 panel.webview.postMessage({
                                     type: 'error',
                                     content: error.message
                                 });
+                                // Re-enable input on error
+                                panel.webview.postMessage({ type: 'streamComplete' });
                             }
                             return;
                     }
@@ -266,157 +364,113 @@ function getWebviewContent() {
         <!DOCTYPE html>
         <html>
             <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
-                <title>Jarvis Code Assistant</title>
                 <style>
                     body {
-                        padding: 15px;
-                        color: var(--vscode-editor-foreground);
-                        font-family: var(--vscode-font-family);
-                    }
-                    #main {
-                        display: flex;
-                        flex-direction: column;
-                        height: 100vh;
-                    }
-                    .status-bar {
-                        display: flex;
-                        align-items: center;
-                        gap: 8px;
-                        margin-bottom: 15px;
-                        padding: 8px;
-                        background: var(--vscode-editor-background);
-                        border: 1px solid var(--vscode-input-border);
-                        border-radius: 4px;
-                    }
-                    .status-indicator {
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 50%;
-                        background: #4CAF50;
-                    }
-                    .status-text {
-                        color: var(--vscode-editor-foreground);
-                        font-size: 12px;
-                    }
-                    #response {
-                        flex: 1;
-                        border: 1px solid var(--vscode-input-border);
                         padding: 10px;
+                        font-family: sans-serif;
+                        background-color: var(--vscode-editor-background);
+                        color: var(--vscode-editor-foreground);
+                    }
+                    #messages {
                         margin-bottom: 10px;
-                        overflow-y: auto;
                         white-space: pre-wrap;
-                        background: var(--vscode-editor-background);
                     }
-                    .input-container {
-                        display: flex;
-                        gap: 8px;
+                    .user {
+                        color: #4a9eff;
+                        margin-bottom: 5px;
                     }
-                    #queryInput {
-                        flex: 1;
-                        padding: 8px;
-                        min-height: 60px;
-                        background: var(--vscode-input-background);
+                    .assistant {
+                        color: #ffffff;
+                        margin-bottom: 15px;
+                    }
+                    #userInput {
+                        width: 100%;
+                        padding: 5px;
+                        background-color: var(--vscode-input-background);
                         color: var(--vscode-input-foreground);
                         border: 1px solid var(--vscode-input-border);
-                    }
-                    button {
-                        padding: 0 16px;
-                        background: var(--vscode-button-background);
-                        color: var(--vscode-button-foreground);
-                        border: none;
-                    }
-                    .loading {
-                        position: fixed;
-                        bottom: 80px;
-                        left: 50%;
-                        transform: translateX(-50%);
-                        background: var(--vscode-editor-background);
-                        padding: 6px 12px;
-                        border-radius: 4px;
-                        border: 1px solid var(--vscode-input-border);
-                        display: none;
                     }
                 </style>
             </head>
             <body>
-                <div id="main">
-                    <div class="status-bar">
-                        <div class="status-indicator"></div>
-                        <span class="status-text">Jarvis is initializing...</span>
-                    </div>
-                    <div id="response"></div>
-                    <div class="input-container">
-                        <textarea id="queryInput" placeholder="Ask Jarvis about your code..." disabled></textarea>
-                        <button onclick="sendQuery()" disabled>Ask Jarvis</button>
-                    </div>
-                    <div class="loading">Jarvis is thinking...</div>
-                </div>
-
+                <div id="messages"></div>
+                <input type="text" id="userInput" placeholder="Type your question here..." />
+                
                 <script>
                     const vscode = acquireVsCodeApi();
-                    const responseEl = document.getElementById('response');
-                    const inputEl = document.getElementById('queryInput');
-                    const buttonEl = document.querySelector('button');
-                    const statusText = document.querySelector('.status-text');
-                    const statusIndicator = document.querySelector('.status-indicator');
-                    const loadingEl = document.querySelector('.loading');
-                    let isResponding = false;
-
-                    function sendQuery() {
-                        const text = inputEl.value.trim();
-                        if (!text || isResponding) return;
-                        
-                        isResponding = true;
-                        inputEl.disabled = true;
-                        buttonEl.disabled = true;
-                        loadingEl.style.display = 'block';
-
-                        responseEl.textContent += '> ' + text + '\\n\\n';
-                        
-                        vscode.postMessage({ command: 'query', text });
-                        inputEl.value = '';
-                        responseEl.scrollTop = responseEl.scrollHeight;
-                    }
-
-                    window.addEventListener('message', event => {
-                        const message = event.data;
-                        switch (message.type) {
-                            case 'ready':
-                                statusText.textContent = 'Jarvis is Connected';
-                                statusIndicator.style.background = '#4CAF50';
-                                inputEl.disabled = false;
-                                buttonEl.disabled = false;
-                                break;
-                            case 'stream':
-                                responseEl.textContent += message.content;
-                                responseEl.scrollTop = responseEl.scrollHeight;
-                                break;
-                            case 'streamComplete':
-                                loadingEl.style.display = 'none';
-                                responseEl.textContent += '\\n\\n';
-                                isResponding = false;
-                                inputEl.disabled = false;
-                                buttonEl.disabled = false;
-                                break;
-                            case 'error':
-                                loadingEl.style.display = 'none';
-                                responseEl.textContent = 'Error: ' + message.content + '\\n\\n';
-                                statusText.textContent = 'Jarvis encountered an error';
-                                statusIndicator.style.background = '#f44336';
-                                isResponding = false;
-                                inputEl.disabled = false;
-                                buttonEl.disabled = false;
-                                break;
+                    const messagesDiv = document.getElementById('messages');
+                    const userInput = document.getElementById('userInput');
+                    
+                    userInput.addEventListener('keyup', (e) => {
+                        if (e.key === 'Enter' && userInput.value.trim() && !userInput.disabled) {
+                            // Add user message
+                            messagesDiv.innerHTML += '<div class="user">You: ' + userInput.value + '</div>';
+                            
+                            // Create a placeholder for the assistant response
+                            messagesDiv.innerHTML += '<div class="assistant" id="currentResponse">Assistant: </div>';
+                            
+                            // Send to backend
+                            vscode.postMessage({ command: 'query', text: userInput.value });
+                            
+                            // Clear input and disable it
+                            userInput.value = '';
+                            userInput.disabled = true;
                         }
                     });
-
-                    inputEl.addEventListener('keydown', e => {
-                        if (e.key === 'Enter' && !e.shiftKey && !isResponding) {
-                            e.preventDefault();
-                            sendQuery();
+                    
+                    window.addEventListener('message', event => {
+                        const message = event.data;
+                        const currentResponse = document.getElementById('currentResponse');
+                        
+                        switch (message.type) {
+                            case 'processing':
+                                // Ensure input is disabled during processing
+                                userInput.disabled = true;
+                                break;
+                                
+                            case 'stream':
+                                // Make sure we have a response element
+                                if (!currentResponse) {
+                                    messagesDiv.innerHTML += '<div class="assistant" id="currentResponse">Assistant: </div>';
+                                }
+                                
+                                // Get the current text and append new content
+                                let currentText = currentResponse.textContent;
+                                if (currentText === 'Assistant: ') {
+                                    currentText = 'Assistant: ';
+                                }
+                                
+                                // Append the new content
+                                currentResponse.textContent = currentText + message.content;
+                                
+                                // Scroll to the bottom
+                                window.scrollTo(0, document.body.scrollHeight);
+                                break;
+                                
+                            case 'streamComplete':
+                                // Re-enable input after streaming is complete
+                                userInput.disabled = false;
+                                
+                                // Remove the ID from the current response so new responses get their own element
+                                if (currentResponse) {
+                                    currentResponse.removeAttribute('id');
+                                }
+                                
+                                // Focus the input field
+                                userInput.focus();
+                                break;
+                                
+                            case 'error':
+                                // Handle errors
+                                if (!currentResponse) {
+                                    messagesDiv.innerHTML += '<div class="assistant" id="currentResponse">Assistant: </div>';
+                                }
+                                
+                                currentResponse.textContent = 'Assistant: Error: ' + message.content;
+                                currentResponse.removeAttribute('id');
+                                userInput.disabled = false;
+                                userInput.focus();
+                                break;
                         }
                     });
                 </script>
