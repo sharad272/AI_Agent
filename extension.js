@@ -367,57 +367,220 @@ function getWebviewContent() {
                 <style>
                     body {
                         padding: 10px;
-                        font-family: sans-serif;
+                        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                         background-color: var(--vscode-editor-background);
                         color: var(--vscode-editor-foreground);
+                        margin: 0;
+                        padding: 15px;
+                        height: 100vh;
+                        display: flex;
+                        flex-direction: column;
                     }
+                    
+                    .status-bar {
+                        padding: 8px 12px;
+                        background-color: var(--vscode-statusBar-background);
+                        color: var(--vscode-statusBar-foreground);
+                        margin-bottom: 15px;
+                        display: flex;
+                        align-items: center;
+                        border-radius: 4px;
+                        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+                    }
+                    
+                    .status-bar .status-icon {
+                        margin-right: 8px;
+                        color: #44cc44;
+                        animation: pulse 2s infinite;
+                    }
+                    
+                    @keyframes pulse {
+                        0% { opacity: 1; }
+                        50% { opacity: 0.7; }
+                        100% { opacity: 1; }
+                    }
+                    
                     #messages {
-                        margin-bottom: 10px;
+                        margin-bottom: 15px;
                         white-space: pre-wrap;
+                        flex: 1;
+                        overflow-y: auto;
+                        padding-right: 5px;
                     }
+                    
+                    #messages::-webkit-scrollbar {
+                        width: 6px;
+                    }
+                    
+                    #messages::-webkit-scrollbar-thumb {
+                        background-color: rgba(100, 100, 100, 0.5);
+                        border-radius: 3px;
+                    }
+                    
+                    .message {
+                        margin-bottom: 15px;
+                        animation: fadeIn 0.3s ease-in-out;
+                        line-height: 1.5;
+                    }
+                    
+                    @keyframes fadeIn {
+                        from { opacity: 0; transform: translateY(5px); }
+                        to { opacity: 1; transform: translateY(0); }
+                    }
+                    
                     .user {
                         color: #4a9eff;
-                        margin-bottom: 5px;
+                        padding: 8px 12px;
+                        border-radius: 5px;
+                        background-color: rgba(74, 158, 255, 0.1);
+                        border-left: 3px solid #4a9eff;
                     }
+                    
                     .assistant {
                         color: #ffffff;
-                        margin-bottom: 15px;
+                        padding: 8px 12px;
+                        border-radius: 5px;
+                        background-color: rgba(255, 255, 255, 0.05);
+                        border-left: 3px solid #888;
                     }
-                    #userInput {
-                        width: 100%;
-                        padding: 5px;
+                    
+                    .thinking {
+                        color: orange;
+                        font-style: italic;
+                        padding: 8px 12px;
+                        border-radius: 5px;
+                        background-color: rgba(255, 165, 0, 0.1);
+                        border-left: 3px solid orange;
+                    }
+                    
+                    .input-container {
+                        display: flex;
+                        align-items: center;
                         background-color: var(--vscode-input-background);
-                        color: var(--vscode-input-foreground);
                         border: 1px solid var(--vscode-input-border);
+                        border-radius: 5px;
+                        padding: 5px;
+                        margin-top: 5px;
+                    }
+                    
+                    #userInput {
+                        flex: 1;
+                        padding: 8px;
+                        background-color: transparent;
+                        color: var(--vscode-input-foreground);
+                        border: none;
+                        outline: none;
+                        font-size: 14px;
+                    }
+                    
+                    .send-button {
+                        background-color: var(--vscode-button-background);
+                        color: var(--vscode-button-foreground);
+                        border: none;
+                        border-radius: 3px;
+                        padding: 6px 12px;
+                        cursor: pointer;
+                        margin-left: 5px;
+                        transition: background-color 0.2s;
+                    }
+                    
+                    .send-button:hover {
+                        background-color: var(--vscode-button-hoverBackground);
+                    }
+                    
+                    .send-button:disabled {
+                        opacity: 0.6;
+                        cursor: not-allowed;
+                    }
+                    
+                    code {
+                        font-family: 'Courier New', monospace;
+                        background-color: rgba(255, 255, 255, 0.1);
+                        padding: 2px 4px;
+                        border-radius: 3px;
+                    }
+                    
+                    pre {
+                        background-color: var(--vscode-editor-background);
+                        border: 1px solid var(--vscode-editorWidget-border);
+                        border-radius: 4px;
+                        padding: 10px;
+                        overflow-x: auto;
+                        margin: 10px 0;
                     }
                 </style>
             </head>
             <body>
+                <div class="status-bar">
+                    <span class="status-icon">●</span> Jarvis is Connected
+                </div>
                 <div id="messages"></div>
-                <input type="text" id="userInput" placeholder="Type your question here..." />
+                <div class="input-container">
+                    <input type="text" id="userInput" placeholder="Ask Jarvis something..." />
+                    <button id="sendButton" class="send-button">Send</button>
+                </div>
                 
                 <script>
                     const vscode = acquireVsCodeApi();
                     const messagesDiv = document.getElementById('messages');
                     const userInput = document.getElementById('userInput');
+                    const sendButton = document.getElementById('sendButton');
                     
-                    userInput.addEventListener('keyup', (e) => {
-                        if (e.key === 'Enter' && userInput.value.trim() && !userInput.disabled) {
-                            // Add user message
-                            messagesDiv.innerHTML += '<div class="user">You: ' + userInput.value + '</div>';
+                    // Function to send user query
+                    function sendQuery() {
+                        const userMessage = userInput.value.trim();
+                        if (userMessage && !userInput.disabled) {
+                            // Add user message with proper class
+                            messagesDiv.innerHTML += '<div class="message user">You: ' + userMessage + '</div>';
                             
                             // Create a placeholder for the assistant response
-                            messagesDiv.innerHTML += '<div class="assistant" id="currentResponse">Assistant: </div>';
+                            messagesDiv.innerHTML += '<div class="message assistant" id="currentResponse">Assistant: </div>';
                             
                             // Send to backend
-                            vscode.postMessage({ command: 'query', text: userInput.value });
+                            vscode.postMessage({ command: 'query', text: userMessage });
                             
                             // Clear input and disable it
                             userInput.value = '';
                             userInput.disabled = true;
+                            sendButton.disabled = true;
+                            
+                            // Scroll to the bottom
+                            scrollToBottom();
+                        }
+                    }
+                    
+                    // Function to handle code blocks in responses
+                    function formatResponse(text) {
+                        // Replace backtick code blocks with HTML
+                        let formatted = text.replace(/\`\`\`([a-zA-Z]*)([\s\S]*?)\`\`\`/g, function(match, language, code) {
+                            return '<pre><code class="language-' + language + '">' + code + '</code></pre>';
+                        });
+                        
+                        // Replace inline code
+                        formatted = formatted.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+                        
+                        return formatted;
+                    }
+                    
+                    // Function to scroll to bottom of messages
+                    function scrollToBottom() {
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    }
+                    
+                    // Event listener for Enter key
+                    userInput.addEventListener('keyup', (e) => {
+                        if (e.key === 'Enter') {
+                            sendQuery();
                         }
                     });
                     
+                    // Event listener for Send button
+                    sendButton.addEventListener('click', sendQuery);
+                    
+                    // Set focus on input field
+                    userInput.focus();
+                    
+                    // Listen for messages from extension
                     window.addEventListener('message', event => {
                         const message = event.data;
                         const currentResponse = document.getElementById('currentResponse');
@@ -426,30 +589,56 @@ function getWebviewContent() {
                             case 'processing':
                                 // Ensure input is disabled during processing
                                 userInput.disabled = true;
+                                sendButton.disabled = true;
+                                break;
+                                
+                            case 'thinking':
+                                // Handle thinking content (orange text)
+                                if (!document.getElementById('currentThinking')) {
+                                    messagesDiv.innerHTML += '<div class="message thinking" id="currentThinking">Thinking: ' + message.content + '</div>';
+                                } else {
+                                    const thinkingEl = document.getElementById('currentThinking');
+                                    thinkingEl.innerHTML = 'Thinking: ' + thinkingEl.innerHTML.substring(9) + message.content;
+                                }
+                                
+                                // Scroll to the bottom
+                                scrollToBottom();
+                                break;
+                                
+                            case 'thinkingComplete':
+                                // Remove thinking ID but keep the element visible
+                                const thinkingEl = document.getElementById('currentThinking');
+                                if (thinkingEl) {
+                                    thinkingEl.removeAttribute('id');
+                                }
+                                
+                                // Create a new element for the actual response (below the thinking content)
+                                messagesDiv.innerHTML += '<div class="message assistant" id="currentResponse">Assistant: </div>';
+                                
+                                // Scroll to the bottom
+                                scrollToBottom();
                                 break;
                                 
                             case 'stream':
                                 // Make sure we have a response element
                                 if (!currentResponse) {
-                                    messagesDiv.innerHTML += '<div class="assistant" id="currentResponse">Assistant: </div>';
+                                    // If thinking has happened but no response element exists yet,
+                                    // add it after the thinking content
+                                    messagesDiv.innerHTML += '<div class="message assistant" id="currentResponse">Assistant: </div>';
                                 }
                                 
-                                // Get the current text and append new content
-                                let currentText = currentResponse.textContent;
-                                if (currentText === 'Assistant: ') {
-                                    currentText = 'Assistant: ';
-                                }
-                                
-                                // Append the new content
-                                currentResponse.textContent = currentText + message.content;
+                                // Format and append the new content
+                                const formattedContent = formatResponse(message.content);
+                                currentResponse.innerHTML = 'Assistant: ' + currentResponse.innerHTML.substring(11) + formattedContent;
                                 
                                 // Scroll to the bottom
-                                window.scrollTo(0, document.body.scrollHeight);
+                                scrollToBottom();
                                 break;
                                 
                             case 'streamComplete':
                                 // Re-enable input after streaming is complete
                                 userInput.disabled = false;
+                                sendButton.disabled = false;
                                 
                                 // Remove the ID from the current response so new responses get their own element
                                 if (currentResponse) {
@@ -463,12 +652,18 @@ function getWebviewContent() {
                             case 'error':
                                 // Handle errors
                                 if (!currentResponse) {
-                                    messagesDiv.innerHTML += '<div class="assistant" id="currentResponse">Assistant: </div>';
+                                    messagesDiv.innerHTML += '<div class="message assistant" id="currentResponse">Assistant: </div>';
                                 }
                                 
-                                currentResponse.textContent = 'Assistant: Error: ' + message.content;
+                                currentResponse.innerHTML = 'Assistant: <span style="color: #ff6b6b;">Error: ' + message.content + '</span>';
                                 currentResponse.removeAttribute('id');
                                 userInput.disabled = false;
+                                sendButton.disabled = false;
+                                userInput.focus();
+                                break;
+                                
+                            case 'ready':
+                                // Focus the input when the panel is ready
                                 userInput.focus();
                                 break;
                         }
