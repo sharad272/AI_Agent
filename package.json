@@ -3,11 +3,34 @@
     "displayName": "Jarvis Code Assistant",
     "description": "AI-powered code assistant with streaming responses",
     "version": "0.1.0",
+    "publisher": "sharad_goyal",
+    "author": {
+        "name": "Sharad Goyal"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/sharadgoyal/jarvis-code-assistant.git"
+    },
+    "license": "MIT",
+    "icon": "resources/jarvis-icon.png",
+    "galleryBanner": {
+        "color": "#C80000",
+        "theme": "dark"
+    },
     "engines": {
         "vscode": "^1.60.0"
     },
     "categories": [
-        "Other"
+        "Other",
+        "Programming Languages",
+        "Machine Learning"
+    ],
+    "keywords": [
+        "ai",
+        "assistant",
+        "code assistant",
+        "jarvis",
+        "coding"
     ],
     "activationEvents": [
         "onCommand:aiagent.openJarvis"
@@ -29,13 +52,16 @@
         ]
     },
     "scripts": {
-        "lint": "eslint ."
+        "lint": "eslint .",
+        "package": "vsce package",
+        "publish": "vsce publish"
     },
     "dependencies": {
         "node-fetch": "^2.6.1"
     },
     "devDependencies": {
         "@types/vscode": "^1.60.0",
-        "eslint": "^7.27.0"
+        "eslint": "^7.27.0",
+        "@vscode/vsce": "^2.21.1"
     }
 }
